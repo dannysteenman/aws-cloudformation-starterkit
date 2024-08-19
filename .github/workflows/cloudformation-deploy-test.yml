@@ -1,0 +1,47 @@
+name: Deploy CloudFormation Templates to Test Account
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.TEST_AWS_ACCOUNT_ID }}:role/GitHubActionsServiceRole
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install Rain
+        run: |
+          RAIN_VERSION=$(curl -s https://api.github.com/repos/aws-cloudformation/rain/releases/latest | jq -r .tag_name)
+          curl -L -o rain.zip "https://github.com/aws-cloudformation/rain/releases/download/${RAIN_VERSION}/rain-${RAIN_VERSION}_linux-amd64.zip"
+          unzip rain.zip
+          chmod +x rain-${RAIN_VERSION}_linux-amd64/rain
+          sudo mv rain-${RAIN_VERSION}_linux-amd64/rain /usr/local/bin/
+          rm -rf rain-${RAIN_VERSION}_linux-amd64 rain.zip
+          rain --version
+
+      - name: Setup Cloud Formation Linter with Latest Version
+        uses: scottbrenner/cfn-lint-action@v2
+
+      - name: Run Cloud Formation Linter
+        run: cfn-lint
+
+      - name: Checkov GitHub Action
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          config_file: .checkov.yml
+
+      - name: Deploy CloudFormation templates
+        run: ./scripts/deploy-templates.sh

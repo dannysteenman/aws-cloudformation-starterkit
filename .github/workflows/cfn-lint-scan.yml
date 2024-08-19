@@ -1,0 +1,24 @@
+name: cfn-lint
+
+on:
+  pull_request_target:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Cloud Formation Linter with Latest Version
+        uses: scottbrenner/cfn-lint-action@v2
+
+      - name: Run Cloud Formation Linter
+        run: cfn-lint

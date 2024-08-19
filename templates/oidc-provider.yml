@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Creates an OIDC provider and role for use with GitHub Actions.
+
+Parameters:
+  GithubActionsThumbprint:
+    Type: CommaDelimitedList
+    Default: 6938fd4d98bab03faadb97b34396831e3780aea1
+    Description: Comma-separated list of thumbprints for GitHub Actions tokens.
+  AudienceList:
+    Type: CommaDelimitedList
+    Default: sts.amazonaws.com
+    Description: Comma-separated list of allowed audiences for the tokens.
+  SubjectClaimFilters:
+    Type: CommaDelimitedList
+    Description: Subject claim filter for valid tokens.
+  Path:
+    Type: String
+    Default: /
+    Description: IAM Path for the role
+  ManagedPolicyARNs:
+    Type: CommaDelimitedList
+    Default: arn:aws:iam::aws:policy/AdministratorAccess
+    Description: Comma-separated list of ARNs of managed policies to attach to the role
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "GitHub Action Info" }
+        Parameters: [SubjectClaimFilters, GithubActionsThumbprint, AudienceList]
+      - Label: { default: "AWS IAM Info" }
+        Parameters: [Path, ManagedPolicyARNs]
+
+Resources:
+  GitHubIdentityProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ThumbprintList: !Ref GithubActionsThumbprint
+      ClientIdList: !Ref AudienceList
+
+  GitHubActionsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GitHubActionsServiceRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt GitHubIdentityProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": !Ref AudienceList
+              StringLike:
+                "token.actions.githubusercontent.com:sub": !Ref SubjectClaimFilters
+      Description: Service Role for use in GitHub Actions
+      Path: !Ref Path
+      ManagedPolicyArns: !Ref ManagedPolicyARNs
+
+Outputs:
+  ServiceRoleARN:
+    Description: ARN of service role for use in GitHub actions
+    Value: !GetAtt GitHubActionsServiceRole.Arn

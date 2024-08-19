@@ -1,0 +1,25 @@
+branch: main
+directory:
+  - templates
+download-external-modules: false
+evaluate-variables: true
+external-modules-download-path: .external_modules
+framework:
+  - cloudformation
+secrets-scan-file-type: []
+skip-check:
+  - CKV_AWS_7
+  - CKV_AWS_18
+  - CKV_AWS_21
+  - CKV_AWS_62
+  - CKV_AWS_107
+  - CKV_AWS_108
+  - CKV_AWS_109
+  - CKV_AWS_110
+  - CKV_AWS_111
+  - CKV_AWS_116
+  - CKV_AWS_157
+  - CKV_AWS_162
+  - CKV_SECRET_14
+  - CKV_AWS_115
+  - CKV_AWS_117

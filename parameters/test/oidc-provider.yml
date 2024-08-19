@@ -1,0 +1,5 @@
+Parameters:
+  # Set subjectclaimfilter to your own repo here to allow github actions to assume the role on your AWS account
+  SubjectClaimFilters: "repo:dannysteenman/aws-cloudformation-starterkit:*"
+Tags:
+  Project: GitHubActions
