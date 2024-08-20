@@ -184,7 +184,7 @@ Special thanks to the creators of [Rain](https://github.com/aws-cloudformation/r
 
 ## Author
 
-Danny Steenman
+[Danny Steenman](https://towardsthecloud.com/about)
 
 [![](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dannysteenman)
 [![](https://img.shields.io/badge/X-000000?style=for-the-badge&logo=x&logoColor=white)](https://twitter.com/dannysteenman)
