@@ -129,6 +129,16 @@ This starter kit includes GitHub Actions workflows for automated validation and 
 Checkov Scan: Automatically runs Checkov on your templates to catch security and compliance issues before deployment.
 CloudFormation Deploy Test: Deploys your CloudFormation stacks in a test environment to ensure everything works as expected.
 
+## Start adding CloudFormation templates
+
+To start adding CloudFormation templates, simply add new files to the [`./templates`](./templates) directory and commit them to the `main` branch of your repository to trigger the CI/CD workflow. The workflow will automatically deploy your stacks using the provided parameter files.
+
+Here are a couple of repositories containing CloudFormation templates that you can use as a starting point:
+
+- [Official AWS CloudFormation Templates](https://github.com/aws-cloudformation/aws-cloudformation-templates)
+- [Widdix's AWS CloudFormation Templates](https://github.com/widdix/aws-cf-templates)
+- [AWS Quick Start Templates](https://github.com/aws-quickstart/quickstart-examples)
+
 ## Unlock the full potention of your infrastructure - Partner with us!
 
 > [!TIP]
