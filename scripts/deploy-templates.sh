@@ -1,6 +1,6 @@
 #!/bin/bash
+set -euo pipefail
 
-# Function to display help message
 show_help() {
     cat <<EOF
 Usage: $0 -e <environment-name>
@@ -19,104 +19,131 @@ Example:
 EOF
 }
 
-# Check if no arguments were provided
-if [ $# -eq 0 ]; then
-    show_help
+die() {
+    echo "Error: $*" >&2
     exit 1
-fi
+}
 
-# Parse arguments
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TEMPLATES_DIR="$REPO_ROOT/templates"
+PARAMETERS_ROOT="$REPO_ROOT/parameters"
+
 ENVIRONMENT=""
-while [[ $# -gt 0 ]]; do
-    key="$1"
+TEMPLATES=()
 
-    case $key in
-    -e | --environment)
-        ENVIRONMENT="$2"
-        shift # past argument
-        shift # past value
-        ;;
-    -h | --help)
-        show_help
-        exit 0
-        ;;
-    *)
-        echo "Unknown option $1"
+parse_args() {
+    if [[ $# -eq 0 ]]; then
         show_help
         exit 1
-        ;;
-    esac
-done
+    fi
 
-# Validate environment argument
-if [ -z "$ENVIRONMENT" ]; then
-    echo "Error: --environment argument is required."
-    show_help
-    exit 1
-fi
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        -e | --environment)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+                die "Missing value for --environment (-e)."
+            fi
+            ENVIRONMENT="$2"
+            shift 2
+            ;;
+        -h | --help)
+            show_help
+            exit 0
+            ;;
+        *)
+            show_help
+            die "Unknown option $1"
+            ;;
+        esac
+    done
 
-# Set the path to the templates and parameters directories
-TEMPLATES_DIR="templates"
-PARAMETERS_DIR="parameters/$ENVIRONMENT"
+    [[ -n "$ENVIRONMENT" ]] || die "--environment argument is required."
+}
 
-# Check if the templates directory exists
-if [ ! -d "$TEMPLATES_DIR" ]; then
-    echo "Error: Templates directory '$TEMPLATES_DIR' not found."
-    exit 1
-fi
+validate_inputs() {
+    local parameters_dir="$1"
 
-# Check if the parameters directory for the environment exists
-if [ ! -d "$PARAMETERS_DIR" ]; then
-    echo "Error: Parameters directory for environment '$ENVIRONMENT' not found."
-    exit 1
-fi
+    [[ -d "$TEMPLATES_DIR" ]] || die "Templates directory '$TEMPLATES_DIR' not found."
+    [[ -d "$parameters_dir" ]] || die "Parameters directory for environment '$ENVIRONMENT' not found at '$parameters_dir'."
+}
 
-# Loop through all YAML/YML/JSON files in the templates directory
-for template in "$TEMPLATES_DIR"/*.{yml,yaml,json}; do
-    # Check if the file exists (to handle the case when no matching files are found)
-    if [ -e "$template" ]; then
+collect_templates() {
+    local templates_dir="$1"
+
+    shopt -s nullglob
+    TEMPLATES=("$templates_dir"/*.yml "$templates_dir"/*.yaml "$templates_dir"/*.json)
+    shopt -u nullglob
+
+    [[ ${#TEMPLATES[@]} -gt 0 ]] || die "No templates found in '$templates_dir'."
+}
+
+find_param_file() {
+    local template_name="$1"
+    local parameters_dir="$2"
+    local ext candidate
+
+    for ext in json yml yaml; do
+        candidate="$parameters_dir/$template_name.$ext"
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+}
+
+deploy_template() {
+    local template="$1"
+    local param_file="$2"
+    local cmd
+
+    cmd=(rain deploy "$template" --yes)
+    if [[ -n "$param_file" ]]; then
+        cmd+=(--config "$param_file")
+    fi
+
+    printf "Running command:"
+    printf " %q" "${cmd[@]}"
+    printf "\n"
+
+    if "${cmd[@]}"; then
+        echo "Deployment successful for $template"
+        return 0
+    fi
+
+    echo "Deployment failed for $template" >&2
+    return 1
+}
+
+main() {
+    local parameters_dir failures template template_filename template_base param_file
+
+    parse_args "$@"
+
+    parameters_dir="$PARAMETERS_ROOT/$ENVIRONMENT"
+    validate_inputs "$parameters_dir"
+    collect_templates "$TEMPLATES_DIR"
+
+    failures=0
+    for template in "${TEMPLATES[@]}"; do
         echo "Deploying template: $template"
 
-        # Construct the base name of the template without its extension
-        basename=$(basename "$template")
-        name_without_extension="${basename%.*}"
+        template_filename="$(basename "$template")"
+        template_base="${template_filename%.*}"
+        param_file="$(find_param_file "$template_base" "$parameters_dir")"
 
-        # Attempt to find the parameter file with different extensions
-        found_param_file=false
-        for ext in json yml yaml; do
-            param_file="$PARAMETERS_DIR/$name_without_extension.$ext"
-            if [ -e "$param_file" ]; then
-                found_param_file=true
-                break
-            fi
-        done
-
-        # Determine the command to run based on whether a parameter file was found
-        if [ "$found_param_file" = true ]; then
-            rain_command="rain deploy \"$template\" --yes --config \"$param_file\""
-        else
-            rain_command="rain deploy \"$template\" --yes"
+        if ! deploy_template "$template" "$param_file"; then
+            failures=$((failures + 1))
         fi
+    done
 
-        # Show the command being run
-        echo "Running command: $rain_command"
-
-        # Run the determined command
-        output=$(eval "$rain_command" 2>&1)
-        deployment_status=$?
-
-        # Log the output
-        if [ $deployment_status -eq 0 ]; then
-            echo "Deployment successful for $template"
-        else
-            echo "Deployment failed for $template"
-            echo "Deployment output:"
-            echo "$output"
-            echo "-----------------------------------"
-        fi
+    if [[ $failures -gt 0 ]]; then
+        die "$failures deployment(s) failed."
     fi
-done
 
-echo "All deployments completed."
+    echo "All deployments completed."
+}
 
-echo "All deployments completed."
+main "$@"
