@@ -1,37 +1,173 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Function to prompt the user for input and validate environment selection
-prompt_for_environment() {
-    PS3="Please enter your environment choice: "
-    select env in "test" "staging" "production"; do
-        if [[ -n $env ]]; then
-            echo $env
-            break
-        else
-            echo "Invalid choice. Please select a valid environment."
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+VALID_ENVIRONMENTS=("test" "staging" "production")
+
+REPO_NAME=""
+ENVIRONMENT=""
+UPPERCASE_ENV=""
+WORKFLOW_DIR=""
+WORKFLOW_FILENAME=""
+PARAMETERS_DIR=""
+OIDC_PROVIDER_FILE=""
+
+show_help() {
+    cat <<EOF
+Usage: $0 [-r <owner/repo>] [-e <environment>]
+
+Provision GitHub workflow and OIDC parameter files for a repository.
+
+Options:
+  -r, --repo <owner/repo>    GitHub repository name (for example: towardsthecloud/aws-cloudformation-starter-kit)
+  -e, --environment <env>    Environment name: test, staging, or production
+  -h, --help                 Show this help message and exit
+
+If -r or -e are omitted, this script prompts for the missing values in interactive mode.
+EOF
+}
+
+error() {
+    printf 'Error: %s\n' "$*" >&2
+}
+
+on_error() {
+    local line="$1"
+    local exit_code="$2"
+    printf 'Error: provision-repo.sh failed at line %s (exit code: %s)\n' "$line" "$exit_code" >&2
+}
+
+trap 'on_error "$LINENO" "$?"' ERR
+
+ensure_dependencies() {
+    local dep
+    for dep in cat mkdir; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            error "Required command '$dep' is not available."
+            exit 1
         fi
     done
 }
 
-# Prompt the user for input
-read -p "Enter the GitHub repository name (e.g., dannysteenman/aws-cloudformation-starter-kit): " repo_name
-environment=$(prompt_for_environment)
+validate_repo_name() {
+    local repo_name="$1"
+    if [[ ! "$repo_name" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+        error "Invalid repository format '$repo_name'. Expected '<owner>/<repo>' with letters, numbers, '.', '_', or '-'."
+        return 1
+    fi
+}
 
-# Convert environment to uppercase
-uppercase_env=$(echo "$environment" | tr 'a-z' 'A-Z')
+validate_environment() {
+    local environment="$1"
+    local supported_environments=""
+    local valid_environment
+    for valid_environment in "${VALID_ENVIRONMENTS[@]}"; do
+        if [[ "$environment" == "$valid_environment" ]]; then
+            return 0
+        fi
+    done
+    supported_environments=$(printf '%s, ' "${VALID_ENVIRONMENTS[@]}")
+    supported_environments=${supported_environments%, }
+    error "Invalid environment '$environment'. Expected one of: ${supported_environments}."
+    return 1
+}
 
-# Derive filenames and directories
-workflow_dir=".github/workflows"
-workflow_filename="${workflow_dir}/cloudformation-deploy-${environment}.yml"
-parameters_dir="parameters/${environment}"
-oidc_provider_file="${parameters_dir}/oidc-provider.yml"
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        -r | --repo)
+            if [[ $# -lt 2 ]]; then
+                error "Missing value for '$1'."
+                show_help >&2
+                exit 1
+            fi
+            REPO_NAME="$2"
+            shift 2
+            ;;
+        -e | --environment)
+            if [[ $# -lt 2 ]]; then
+                error "Missing value for '$1'."
+                show_help >&2
+                exit 1
+            fi
+            ENVIRONMENT="$2"
+            shift 2
+            ;;
+        -h | --help)
+            show_help
+            exit 0
+            ;;
+        *)
+            error "Unknown option '$1'."
+            show_help >&2
+            exit 1
+            ;;
+        esac
+    done
+}
 
-# Create the .github/workflows directory if it does not exist
-mkdir -p "$workflow_dir"
+prompt_for_repo_name() {
+    local repo_input=""
+    while true; do
+        read -r -p "Enter the GitHub repository name (e.g., towardsthecloud/aws-cloudformation-starter-kit): " repo_input
+        if validate_repo_name "$repo_input"; then
+            printf '%s\n' "$repo_input"
+            return 0
+        fi
+    done
+}
 
-# Create the GitHub workflow file with dynamic content
-cat <<EOL >"$workflow_filename"
-name: Deploy CloudFormation Templates to ${environment} Account
+prompt_for_environment() {
+    local environment_choice=""
+    PS3="Please enter your environment choice: "
+    select environment_choice in "${VALID_ENVIRONMENTS[@]}"; do
+        if [[ -n "$environment_choice" ]]; then
+            printf '%s\n' "$environment_choice"
+            return 0
+        fi
+        printf 'Invalid choice. Please select a valid environment.\n' >&2
+    done
+}
+
+resolve_inputs() {
+    if [[ -z "$REPO_NAME" ]]; then
+        if [[ -t 0 ]]; then
+            REPO_NAME="$(prompt_for_repo_name)"
+        else
+            error "Repository name is required in non-interactive mode. Use -r or --repo."
+            exit 1
+        fi
+    fi
+    if ! validate_repo_name "$REPO_NAME"; then
+        exit 1
+    fi
+
+    if [[ -z "$ENVIRONMENT" ]]; then
+        if [[ -t 0 ]]; then
+            ENVIRONMENT="$(prompt_for_environment)"
+        else
+            error "Environment is required in non-interactive mode. Use -e or --environment."
+            exit 1
+        fi
+    fi
+    if ! validate_environment "$ENVIRONMENT"; then
+        exit 1
+    fi
+}
+
+derive_paths() {
+    UPPERCASE_ENV=${ENVIRONMENT^^}
+    WORKFLOW_DIR=".github/workflows"
+    WORKFLOW_FILENAME="${WORKFLOW_DIR}/cloudformation-deploy-${ENVIRONMENT}.yml"
+    PARAMETERS_DIR="parameters/${ENVIRONMENT}"
+    OIDC_PROVIDER_FILE="${PARAMETERS_DIR}/oidc-provider.yml"
+}
+
+write_workflow_file() {
+    mkdir -p "$WORKFLOW_DIR"
+    cat <<EOF >"$WORKFLOW_FILENAME"
+name: Deploy CloudFormation Templates to ${ENVIRONMENT} Account
 on:
   push:
     branches: [main]
@@ -48,7 +184,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::\${{ vars.${uppercase_env}_AWS_ACCOUNT_ID }}:role/GitHubActionsServiceRole
+          role-to-assume: arn:aws:iam::\${{ vars.${UPPERCASE_ENV}_AWS_ACCOUNT_ID }}:role/GitHubActionsServiceRole
           aws-region: \${{ vars.AWS_REGION }}
       - name: Install Rain
         run: |
@@ -64,19 +200,31 @@ jobs:
         with:
           config_file: .checkov.yml
       - name: Deploy CloudFormation templates
-        run: ./scripts/deploy-templates.sh -e ${environment}
-EOL
+        run: ./scripts/deploy-templates.sh -e ${ENVIRONMENT}
+EOF
+}
 
-# Create the parameters directory if it does not exist
-mkdir -p "$parameters_dir"
-
-# Create the oidc-provider.yml file with dynamic content
-cat <<EOL >"$oidc_provider_file"
+write_oidc_provider_file() {
+    mkdir -p "$PARAMETERS_DIR"
+    cat <<EOF >"$OIDC_PROVIDER_FILE"
 Parameters:
   # Set subjectclaimfilter to your own repo here to allow github actions to assume the role on your AWS account
-  SubjectClaimFilters: "repo:${repo_name}:*"
+  SubjectClaimFilters: "repo:${REPO_NAME}:*"
 Tags:
   Project: GitHubActions
-EOL
+EOF
+}
 
-echo "Provisioning completed. Workflow file '$workflow_filename' and parameters file '$oidc_provider_file' have been created."
+main() {
+    ensure_dependencies
+    parse_args "$@"
+    resolve_inputs
+    derive_paths
+    write_workflow_file
+    write_oidc_provider_file
+
+    printf "Provisioning completed. Workflow file '%s' and parameters file '%s' have been created.\n" \
+        "$WORKFLOW_FILENAME" "$OIDC_PROVIDER_FILE"
+}
+
+main "$@"

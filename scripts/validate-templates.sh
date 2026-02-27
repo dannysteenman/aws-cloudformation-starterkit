@@ -1,47 +1,95 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Define the directory containing CloudFormation templates
-TEMPLATE_DIR="./templates"
-CONFIG_FILE="./.checkov.yml"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"         # Get the script directory
-REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt" # Adjust path relative to script location
+set -euo pipefail
 
-# Function to check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TEMPLATE_DIR="${TEMPLATE_DIR:-$ROOT_DIR/templates}"
+CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/.checkov.yml}"
+REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-$ROOT_DIR/requirements.txt}"
+DEFAULT_TOOLS_VENV_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/aws-cloudformation-starter-kit-tools-venv"
+TOOLS_VENV_DIR="${TOOLS_VENV_DIR:-$DEFAULT_TOOLS_VENV_DIR}"
+CHECKOV_CMD=()
 
-# Check if Python is installed
-if ! command_exists python3; then
-    echo "Python3 is not installed. Please install Python3 to proceed."
-    exit 1
-fi
-
-# Check if pip is installed
-if ! command_exists pip3; then
-    echo "pip3 is not installed. Please install pip3 to proceed."
-    exit 1
-fi
-
-# Check if Checkov is installed, install if not
-if ! command_exists checkov; then
-    echo "Checkov is not installed. Installing Checkov..."
-    pip3 install -r "$REQUIREMENTS_FILE"
-    if [ $? -ne 0 ]; then
-        echo "Failed to install Checkov. Please check your Python and pip installation."
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "$1 is required but not installed."
         exit 1
     fi
-else
-    echo "Checkov is already installed."
-fi
+}
 
-# Validate CloudFormation templates using Checkov
-echo "Validating CloudFormation templates in $TEMPLATE_DIR... using the configuration file $CONFIG_FILE"
-checkov
+validate_paths() {
+    if [[ ! -d "$TEMPLATE_DIR" ]]; then
+        echo "Template directory not found: $TEMPLATE_DIR"
+        exit 1
+    fi
 
-# Check the exit status of Checkov
-if [ $? -eq 0 ]; then
-    echo "Validation completed successfully. No issues found."
-else
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "Checkov config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+}
+
+ensure_checkov() {
+    require_command python3
+
+    if ! python3 -m pip --version >/dev/null 2>&1; then
+        echo "Python3 pip module is required but was not found."
+        exit 1
+    fi
+
+    if command -v checkov >/dev/null 2>&1; then
+        echo "Checkov is already installed."
+        CHECKOV_CMD=("checkov")
+        return
+    fi
+
+    if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
+        echo "Requirements file not found: $REQUIREMENTS_FILE"
+        exit 1
+    fi
+
+    local venv_python="$TOOLS_VENV_DIR/bin/python3"
+    local venv_checkov="$TOOLS_VENV_DIR/bin/checkov"
+
+    if [[ ! -x "$venv_python" ]]; then
+        echo "Checkov is not installed. Creating tool virtualenv at $TOOLS_VENV_DIR..."
+        if ! python3 -m venv "$TOOLS_VENV_DIR"; then
+            echo "Failed to create virtualenv at $TOOLS_VENV_DIR."
+            exit 1
+        fi
+    fi
+
+    echo "Installing validation dependencies from $REQUIREMENTS_FILE into $TOOLS_VENV_DIR..."
+    if ! "$venv_python" -m pip install -r "$REQUIREMENTS_FILE"; then
+        echo "Failed to install Checkov dependencies into $TOOLS_VENV_DIR."
+        exit 1
+    fi
+
+    if [[ ! -x "$venv_checkov" ]]; then
+        echo "Checkov was not found after installation: $venv_checkov"
+        exit 1
+    fi
+
+    CHECKOV_CMD=("$venv_checkov")
+}
+
+run_validation() {
+    echo "Validating CloudFormation templates in $TEMPLATE_DIR using $CONFIG_FILE"
+
+    if "${CHECKOV_CMD[@]}" --directory "$TEMPLATE_DIR" --config-file "$CONFIG_FILE"; then
+        echo "Validation completed successfully. No issues found."
+        return 0
+    fi
+
     echo "Validation completed with issues. Please review the output above."
-fi
+    return 1
+}
+
+main() {
+    validate_paths
+    ensure_checkov
+    run_validation
+}
+
+main "$@"
